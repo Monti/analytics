@@ -35,7 +35,7 @@
   <div id="root">
     <h1>Uniswap Liquidity Providers By Token</h1>
     <select id="tokenSelector" class="js-example-basic-single" style="width: 300px; display: inline-block">
-      <option value="dai">DAI</option>
+      <option value="vtho">VTHO</option>
     </select>
     <div id="container" style="width:100%; height:800px;"></div>
   </div>
@@ -71,7 +71,7 @@
           type: 'pie',
           events: {
             redraw: function(event) {
-              this.renderer.text('<b>Total:</b> ' + this.series[0].total.toFixed(2) + ' ETH', 0, 40).css({ fontSize: '16px' }).add()
+              this.renderer.text('<b>Total:</b> ' + this.series[0].total.toFixed(2) + ' VET', 0, 40).css({ fontSize: '16px' }).add()
             }
           }
         },
@@ -83,7 +83,7 @@
           enabled: false
         },
         tooltip: {
-          pointFormat: '<b>{point.y} ETH ({point.percentage:.0f}%)</b>',
+          pointFormat: '<b>{point.y} VET ({point.percentage:.0f}%)</b>',
         },
         plotOptions: {
           pie: {
@@ -91,7 +91,7 @@
             cursor: 'pointer',
             dataLabels: {
               enabled: true,
-              format: '<b>{point.name}</b>: {point.y} ETH ({point.percentage:.0f}%)',
+              format: '<b>{point.name}</b>: {point.y} VET ({point.percentage:.0f}%)',
               style: {
                 color: (Highcharts.theme && Highcharts.theme.contrastTextColor) || 'black'
               },

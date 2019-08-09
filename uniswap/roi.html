@@ -45,14 +45,14 @@
 
     <div id="config-container">
       <select id="tokenSelector" style="width: 300px">
-        <option value="dai">DAI</option>
+        <option value="vtho">VTHO</option>
       </select>
 
       <label id="report" style="font-size: 14pt"></label>
 
       <select id="baselineSelector" style="font-size: 14pt; width: 300px">
         <option value="token">Hodl Token</option>
-        <option value="eth">Hodl ETH</option>
+        <option value="eth">Hodl VET</option>
         <option value="portfolio" selected="selected">Hodl Uniswap Deposit</option>
       </select>
     </div>
@@ -129,7 +129,7 @@
           opposite: true
         }, {
           labels: {
-            format: '{value} ETH'
+            format: '{value} VET'
           },
           title: {
             text: ''
@@ -156,7 +156,7 @@
           yAxis: 1,
           zIndex: 0,
           tooltip: {
-            valueSuffix: ' ETH'
+            valueSuffix: ' VET'
           },
           type: 'column',
           color: '#bbb'
