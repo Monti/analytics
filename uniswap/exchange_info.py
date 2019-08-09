@@ -6,7 +6,9 @@ class ExchangeInfo:
                  token_decimals,
                  exchange_address,
                  eth_balance,
-                 token_balance):
+                 token_balance,
+                 swap_fee,
+                 platform_fee):
         self.token_address = token_address
         self.token_name = token_name
         self.token_symbol = token_symbol
@@ -14,6 +16,8 @@ class ExchangeInfo:
         self.exchange_address = exchange_address
         self.eth_balance = eth_balance
         self.token_balance = token_balance
+        self.swap_fee = swap_fee
+        self.platform_fee = platform_fee
         self.providers = dict()
         self.history = list()
         self.logs = list()
