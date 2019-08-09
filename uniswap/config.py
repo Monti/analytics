@@ -1,22 +1,25 @@
 import json
 import os
 from multiprocessing.pool import ThreadPool
-from web3 import Web3, IPCProvider
+from web3 import Web3
 
 from custom_http_provider import CustomHTTPProvider
 
-INFURA_ADDRESS = 'https://mainnet.infura.io/v3/4facf9a657054a2287e6a4bec21046a3'
+NODE_ADDRESS = 'http://127.0.0.1:8545'
 DEFAULT_REQUEST_TIMEOUT = 30
 
-web3_infura = Web3(CustomHTTPProvider(endpoint_uri=INFURA_ADDRESS, request_kwargs={'timeout': DEFAULT_REQUEST_TIMEOUT}))
-
-web3 = Web3(IPCProvider())
+web3 = Web3(CustomHTTPProvider(endpoint_uri=NODE_ADDRESS, request_kwargs={'timeout': DEFAULT_REQUEST_TIMEOUT}))
+for each in ['request_param_normalizer', 'name_to_address', 'validation', 'abi']:
+    web3.middleware_stack.remove(each)
+web3_infura = web3
 
 ETH = 10 ** 18
 
-UNISWAP_BEGIN_BLOCK = 6627917
+MAX_FEE = 10000
 
-HISTORY_BEGIN_BLOCK = 6628000
+UNISWAP_BEGIN_BLOCK = 1775445
+
+HISTORY_BEGIN_BLOCK = 1775000
 
 HISTORY_CHUNK_SIZE = 5000
 
@@ -24,7 +27,7 @@ REORG_PROTECTION_BLOCKS_COUNT = 50
 
 CURRENT_BLOCK = web3.eth.blockNumber - REORG_PROTECTION_BLOCKS_COUNT
 
-LOGS_BLOCKS_CHUNK = 1000
+LOGS_BLOCKS_CHUNK = 5000
 
 THREADS = 8
 
@@ -45,13 +48,11 @@ with open('abi/str_erc_20.abi') as in_f:
 with open('abi/str_caps_erc_20.abi') as in_f:
     STR_CAPS_ERC_20_ABI = json.load(in_f)
 
-UNISWAP_FACTORY_ADDRESS = '0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95'
+UNISWAP_FACTORY_ADDRESS = '0x6A662F91E14312a11a2E35b359427AEf798fD928'
 
 uniswap_factory = web3.eth.contract(abi=UNISWAP_FACTORY_ABI, address=UNISWAP_FACTORY_ADDRESS)
 
 HARDCODED_INFO = {
-    '0xE0B7927c4aF23765Cb51314A0E0521A9645F0E2A': ('DGD', 'DGD', 9),
-    '0xBB9bc244D798123fDe783fCc1C72d3Bb8C189413': ('TheDAO', 'TheDAO', 16),
 }
 
 DIST_DIR = '../dist/uniswap/'
@@ -83,12 +84,3 @@ ALL_EVENTS = [EVENT_TRANSFER, EVENT_TOKEN_PURCHASE, EVENT_ETH_PURCHASE, EVENT_AD
 INFOS_DUMP = 'infos.dump'
 
 LAST_BLOCK_DUMP = 'last_block.dump'
-
-GRAPHQL_LOGS_QUERY = '''
-{{
-    logs(filter: {{fromBlock: {fromBlock}, toBlock: {toBlock}, addresses: {addresses}, topics: {topics}}}) {{
-    data account {{ address }} topics transaction {{ block {{ number }} }}
-    }}
-}}'''
-
-GRAPHQL_ENDPOINT = 'http://localhost:8547/graphql'

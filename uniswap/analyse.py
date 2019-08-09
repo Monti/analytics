@@ -3,14 +3,11 @@ import logging
 import os
 import pickle
 from collections import defaultdict
-from itertools import groupby
+from functools import partial
 from math import sqrt
 from operator import itemgetter
-from typing import List, Iterable, Dict
+from typing import List, Iterable
 
-import requests
-from eth_utils import to_checksum_address
-from hexbytes import HexBytes
 from retrying import retry
 from web3.utils.events import get_event_data
 
@@ -18,7 +15,7 @@ from config import uniswap_factory, web3, web3_infura, pool, UNISWAP_EXCHANGE_AB
     STR_CAPS_ERC_20_ABI, ERC_20_ABI, HISTORY_BEGIN_BLOCK, CURRENT_BLOCK, HISTORY_CHUNK_SIZE, ETH, LIQUIDITY_DATA, \
     PROVIDERS_DATA, TOKENS_DATA, INFOS_DUMP, LAST_BLOCK_DUMP, ALL_EVENTS, EVENT_TRANSFER, EVENT_ADD_LIQUIDITY, \
     EVENT_REMOVE_LIQUIDITY, EVENT_ETH_PURCHASE, ROI_DATA, EVENT_TOKEN_PURCHASE, VOLUME_DATA, TOTAL_VOLUME_DATA, \
-    GRAPHQL_ENDPOINT, GRAPHQL_LOGS_QUERY, LOGS_BLOCKS_CHUNK
+    LOGS_BLOCKS_CHUNK, MAX_FEE
 from exchange_info import ExchangeInfo
 from roi_info import RoiInfo
 from utils import timeit, bytes_to_str
@@ -78,13 +75,18 @@ def load_exchange_data_impl(token_address, exchange_address):
         logging.warning('FUCKED UP {}'.format(token_address))
         return None
     eth_balance = web3.eth.getBalance(exchange_address, block_identifier=CURRENT_BLOCK)
+    exchange = web3.eth.contract(abi=UNISWAP_EXCHANGE_ABI, address=exchange_address)
+    swap_fee = exchange.functions.swap_fee().call()
+    platform_fee = exchange.functions.platform_fee().call()
     return ExchangeInfo(token_address,
                         token_name,
                         token_symbol,
                         token_decimals,
                         exchange_address,
                         eth_balance,
-                        token_balance)
+                        token_balance,
+                        swap_fee,
+                        platform_fee)
 
 
 @timeit
@@ -116,48 +118,30 @@ def get_chart_range(start: int = HISTORY_BEGIN_BLOCK) -> Iterable[int]:
 
 @timeit
 def load_timestamps() -> List[int]:
-    return [web3.eth.getBlock(n)['timestamp'] for n in get_chart_range()]
+    return [d['timestamp'] for d in pool.map(web3.eth.getBlock, get_chart_range())]
 
 
-def get_logs(addresses: List[str], topics: List, start_block: int) -> Dict[str, List]:
+def get_logs(address: str, topics: List[str], start_block: int) -> List:
     @retry(stop_max_attempt_number=3, wait_fixed=1)
-    def get_chunk(start):
-        resp = requests.post(
-            GRAPHQL_ENDPOINT,
-            json={'query': GRAPHQL_LOGS_QUERY.format(fromBlock=start,
-                                                     toBlock=min(start + LOGS_BLOCKS_CHUNK - 1, CURRENT_BLOCK),
-                                                     addresses=json.dumps(addresses),
-                                                     topics=json.dumps(topics))}
-        )
-        return postprocess_graphql_response(resp.json()['data']['logs'])
+    def get_chunk(start, topic):
+        return web3.eth.getLogs({
+            'fromBlock': start,
+            'toBlock': min(start + LOGS_BLOCKS_CHUNK - 1, CURRENT_BLOCK),
+            'address': address,
+            'topics': [topic]})
 
-    log_chunks = pool.map(get_chunk, range(start_block, CURRENT_BLOCK + 1, LOGS_BLOCKS_CHUNK))
-    logs = [log for chunk in log_chunks for log in chunk]
-    logs.sort(key=lambda l: (l['address'], l['blockNumber']))
-    return dict((k, list(g)) for k, g in groupby(logs, itemgetter('address')))
-
-
-def postprocess_graphql_response(logs: List[dict]) -> List[dict]:
-    return [{
-        'topics': [HexBytes(t) for t in log['topics']],
-        'blockNumber': int(log['transaction']['block']['number'], 16),
-        'data': log['data'],
-        'logIndex': None,
-        'transactionIndex': None,
-        'transactionHash': None,
-        'address': to_checksum_address(log['account']['address']),
-        'blockHash': None
-    } for log in logs]
+    log_chunks = []
+    for t in topics:
+        chunk = pool.map(partial(get_chunk, topic=t), range(start_block, CURRENT_BLOCK + 1, LOGS_BLOCKS_CHUNK))
+        log_chunks.extend(chunk)
+    return sorted((log for chunk in log_chunks for log in chunk), key=itemgetter('blockNumber'))
 
 
 @timeit
 def load_logs(start_block: int, infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
-    addresses = [info.exchange_address for info in infos]
-    new_logs = get_logs(addresses, [ALL_EVENTS], start_block)
     for info in infos:
-        new_exchange_logs = new_logs.get(info.exchange_address)
-        if new_exchange_logs:
-            info.logs += new_exchange_logs
+        new_logs = get_logs(info.exchange_address, ALL_EVENTS, start_block)
+        info.logs += new_logs
 
     logging.info('Loaded transfer logs for {} exchanges'.format(len(infos)))
     return infos
@@ -172,13 +156,16 @@ def populate_providers(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
             if log['topics'][0].hex() != EVENT_TRANSFER:
                 continue
             event = get_event_data(exchange.events.Transfer._get_event_abi(), log)
-            if event['args']['from'] == '0x0000000000000000000000000000000000000000':
-                info.providers[event['args']['to']] += event['args']['value']
-            elif event['args']['to'] == '0x0000000000000000000000000000000000000000':
-                info.providers[event['args']['from']] -= event['args']['value']
+            if event['args']['_from'] == '0x0000000000000000000000000000000000000000':
+                info.providers[event['args']['_to']] += event['args']['_value']
+            elif event['args']['_to'] == '0x0000000000000000000000000000000000000000':
+                info.providers[event['args']['_from']] -= event['args']['_value']
+                owner = exchange.functions.owner().call(block_identifier=log['blockNumber'])
+                info.providers[owner] = exchange.functions.balanceOf(owner).call(
+                    block_identifier=log['blockNumber'])
             else:
-                info.providers[event['args']['from']] -= event['args']['value']
-                info.providers[event['args']['to']] += event['args']['value']
+                info.providers[event['args']['_from']] -= event['args']['_value']
+                info.providers[event['args']['_to']] += event['args']['_value']
     logging.info('Loaded info about providers of {} exchanges'.format(len(infos)))
     return infos
 
@@ -212,7 +199,7 @@ def populate_roi(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
                     token_new_balance = token_balance + event['args']['tokens_sold']
                     dm_numerator *= eth_new_balance * token_new_balance
                     dm_denominator *= eth_balance * token_balance
-                    trade_volume += event['args']['eth_bought'] / 0.997
+                    trade_volume += event['args']['eth_bought'] / (1 - info.swap_fee / MAX_FEE)
                     eth_balance = eth_new_balance
                     token_balance = token_new_balance
                 else:
@@ -226,7 +213,11 @@ def populate_roi(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
                     token_balance = token_new_balance
 
             try:
-                info.roi.append(RoiInfo(sqrt(dm_numerator / dm_denominator), eth_balance, token_balance, trade_volume))
+                info.roi.append(RoiInfo(
+                    1 + (sqrt(dm_numerator / dm_denominator) - 1) * (1 - info.platform_fee / MAX_FEE),
+                    eth_balance,
+                    token_balance,
+                    trade_volume))
             except ValueError:
                 print(info.token_symbol, info.exchange_address)
 
@@ -288,7 +279,7 @@ def populate_liquidity_history(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
             get_chart_range(HISTORY_BEGIN_BLOCK + history_len * HISTORY_CHUNK_SIZE))
         info.history += new_history
 
-    print('Loaded history of balances of {} exchanges'.format(len(infos)))
+    logging.info('Loaded history of balances of {} exchanges'.format(len(infos)))
     return infos
 
 
@@ -299,8 +290,9 @@ def save_tokens(infos: List[ExchangeInfo]):
                   indent=1)
 
 
-def save_liquidity_data(infos: List[ExchangeInfo]):
-    timestamps = load_timestamps()
+def save_liquidity_data(infos: List[ExchangeInfo], timestamps: List[int]):
+    if not timestamps:
+        timestamps = load_timestamps()
 
     valuable_infos = [info for info in infos if is_valuable(info)]
     other_infos = [info for info in infos if not is_valuable(info)]
@@ -329,8 +321,9 @@ def save_providers_data(infos: List[ExchangeInfo]):
                 out_f.write('Other,{:.2f}\n'.format(info.eth_balance * remaining_supply / total_supply / ETH))
 
 
-def save_roi_data(infos: List[ExchangeInfo]):
-    timestamps = load_timestamps()
+def save_roi_data(infos: List[ExchangeInfo], timestamps: List[int]):
+    if not timestamps:
+        timestamps = load_timestamps()
 
     for info in infos:
         with open(ROI_DATA.format(info.token_symbol.lower()), 'w') as out_f:
@@ -344,8 +337,9 @@ def save_roi_data(infos: List[ExchangeInfo]):
                                       '{:.2f}'.format(info.roi[j].trade_volume / ETH)]) + '\n')
 
 
-def save_volume_data(infos: List[ExchangeInfo]):
-    timestamps = load_timestamps()
+def save_volume_data(infos: List[ExchangeInfo], timestamps: List[int]):
+    if not timestamps:
+        timestamps = load_timestamps()
 
     for info in infos:
         with open(VOLUME_DATA.format(info.token_symbol.lower()), 'w') as out_f:
@@ -357,8 +351,9 @@ def save_volume_data(infos: List[ExchangeInfo]):
                                       for t in info.valuable_traders + ['Other']]) + '\n')
 
 
-def save_total_volume_data(infos: List[ExchangeInfo]):
-    timestamps = load_timestamps()
+def save_total_volume_data(infos: List[ExchangeInfo], timestamps: List[int]):
+    if not timestamps:
+        timestamps = load_timestamps()
 
     valuable_infos = [info for info in infos if is_valuable(info)]
     other_infos = [info for info in infos if not is_valuable(info)]
@@ -393,10 +388,11 @@ def load_last_block() -> int:
 
 
 def update_is_required(last_processed_block: int) -> bool:
-    return (CURRENT_BLOCK - HISTORY_BEGIN_BLOCK) // HISTORY_CHUNK_SIZE * HISTORY_CHUNK_SIZE + HISTORY_BEGIN_BLOCK > last_processed_block
+    return (CURRENT_BLOCK - HISTORY_BEGIN_BLOCK) // HISTORY_CHUNK_SIZE * HISTORY_CHUNK_SIZE + HISTORY_BEGIN_BLOCK > \
+           last_processed_block
 
 
-if __name__ == '__main__':
+def main():
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     if os.path.exists(LAST_BLOCK_DUMP):
@@ -427,9 +423,15 @@ if __name__ == '__main__':
         save_raw_data(infos)
 
     valuable_infos = [info for info in infos if is_valuable(info)]
+    timestamps = load_timestamps()
+
     save_tokens(valuable_infos)
-    save_liquidity_data(infos)
+    save_liquidity_data(infos, timestamps)
     save_providers_data(valuable_infos)
-    save_roi_data(valuable_infos)
-    save_volume_data(valuable_infos)
-    save_total_volume_data(infos)
+    save_roi_data(valuable_infos, timestamps)
+    save_volume_data(valuable_infos, timestamps)
+    save_total_volume_data(infos, timestamps)
+
+
+if __name__ == '__main__':
+    main()
