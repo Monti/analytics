@@ -9,7 +9,7 @@ from operator import itemgetter
 from typing import List, Iterable
 
 from retrying import retry
-from web3.utils.events import get_event_data
+from web3._utils.events import get_event_data
 
 from config import uniswap_factory, web3, web3_infura, pool, UNISWAP_EXCHANGE_ABI, STR_ERC_20_ABI, HARDCODED_INFO, \
     STR_CAPS_ERC_20_ABI, ERC_20_ABI, HISTORY_BEGIN_BLOCK, CURRENT_BLOCK, HISTORY_CHUNK_SIZE, ETH, LIQUIDITY_DATA, \
@@ -296,29 +296,52 @@ def save_liquidity_data(infos: List[ExchangeInfo], timestamps: List[int]):
 
     valuable_infos = [info for info in infos if is_valuable(info)]
     other_infos = [info for info in infos if not is_valuable(info)]
+    x = list()
 
     with open(LIQUIDITY_DATA, 'w') as out_f:
-        out_f.write(','.join(['timestamp'] + [i.token_symbol for i in valuable_infos] + ['Other\n']))
         for j in range(len(timestamps)):
-            out_f.write(','.join([str(timestamps[j] * 1000)] +
-                                 ['{:.2f}'.format(i.history[j]) for i in valuable_infos] +
-                                 ['{:.2f}'.format(sum(i.history[j] for i in other_infos))]
-                                 ) + '\n')
+            y = dict()
+            other = 0
+
+            y['timestamp'] = timestamps[j] * 1000
+
+            for i in valuable_infos:
+                y[i.token_symbol] = '{:.2f}'.format(i.history[j])
+            
+            for i in other_infos:
+                y['other'] = '{:.2f}'.format(other + i.history[j])
+            
+            x.append(y)
+        
+        json.dump(x, out_f, indent=1)
+
 
 
 def save_providers_data(infos: List[ExchangeInfo]):
     for info in infos:
+        line = list()
+
         with open(PROVIDERS_DATA.format(info.token_symbol.lower()), 'w') as out_f:
-            out_f.write('provider,eth\n')
             total_supply = sum(info.providers.values())
             remaining_supply = total_supply
+            other = dict()
+
             for p, v in sorted(info.providers.items(), key=lambda x: x[1], reverse=True):
                 s = v / total_supply
+                inner = dict()
+
                 if s >= 0.01:
-                    out_f.write('\u200b{},{:.2f}\n'.format(p, info.eth_balance * s / ETH))
+                    inner['provider'] = p
+                    inner['vet'] = '{:.2f}'.format(info.eth_balance * s / ETH)
                     remaining_supply -= v
+
+                    line.append(inner)
+
             if remaining_supply > 0:
-                out_f.write('Other,{:.2f}\n'.format(info.eth_balance * remaining_supply / total_supply / ETH))
+                other['other'] = '{:.2f}\n'.format(info.eth_balance * remaining_supply / total_supply / ETH)
+                line.append(other)
+            
+            json.dump(line, out_f, indent=1)
 
 
 def save_roi_data(infos: List[ExchangeInfo], timestamps: List[int]):
@@ -326,15 +349,22 @@ def save_roi_data(infos: List[ExchangeInfo], timestamps: List[int]):
         timestamps = load_timestamps()
 
     for info in infos:
+        line = list()
+
         with open(ROI_DATA.format(info.token_symbol.lower()), 'w') as out_f:
-            out_f.write('timestamp,ROI,Token Price,Trade Volume\n')
             for j in range(len(timestamps)):
+                y = dict()
                 if info.roi[j].eth_balance == 0:
                     continue
-                out_f.write(','.join([str(timestamps[j] * 1000),
-                                      '{}'.format(info.roi[j].dm_change),
-                                      '{}'.format(info.roi[j].token_balance / info.roi[j].eth_balance),
-                                      '{:.2f}'.format(info.roi[j].trade_volume / ETH)]) + '\n')
+
+                y['timestamp'] = timestamps[j] * 1000
+                y['roi'] = '{}'.format(info.roi[j].dm_change)
+                y['token-price'] = '{}'.format(info.roi[j].token_balance / info.roi[j].eth_balance)
+                y['trade-volume'] = '{:.2f}'.format(info.roi[j].trade_volume / ETH)
+
+                line.append(y)
+
+            json.dump(line, out_f, indent=1)
 
 
 def save_volume_data(infos: List[ExchangeInfo], timestamps: List[int]):
@@ -342,13 +372,25 @@ def save_volume_data(infos: List[ExchangeInfo], timestamps: List[int]):
         timestamps = load_timestamps()
 
     for info in infos:
+        line = list()
+
         with open(VOLUME_DATA.format(info.token_symbol.lower()), 'w') as out_f:
-            out_f.write(','.join(['timestamp'] + ['\u200b{}'.format(t) for t in info.valuable_traders] +
-                                 ['Other']) + '\n')
             for j in range(len(timestamps)):
-                out_f.write(','.join([str(timestamps[j] * 1000)] +
-                                     ['{:.2f}'.format(info.volume[j][t] / ETH) if info.volume[j][t] else ''
-                                      for t in info.valuable_traders + ['Other']]) + '\n')
+                y = dict()
+
+                y['timestamp'] = timestamps[j] * 1000
+
+                for t in info.valuable_traders:
+                    if info.volume[j][t]:
+                        y[t] = '{:.2f}'.format(info.volume[j][t] / ETH)
+                    else:
+                        y[t] = ''
+                    
+                    y['other'] = 'other'
+
+                line.append(y)
+
+            json.dump(line, out_f, indent=1)
 
 
 def save_total_volume_data(infos: List[ExchangeInfo], timestamps: List[int]):
@@ -357,14 +399,24 @@ def save_total_volume_data(infos: List[ExchangeInfo], timestamps: List[int]):
 
     valuable_infos = [info for info in infos if is_valuable(info)]
     other_infos = [info for info in infos if not is_valuable(info)]
+    x = list()
 
     with open(TOTAL_VOLUME_DATA, 'w') as out_f:
-        out_f.write(','.join(['timestamp'] + [i.token_symbol for i in valuable_infos] + ['Other\n']))
         for j in range(len(timestamps)):
-            out_f.write(','.join([str(timestamps[j] * 1000)] +
-                                 ['{:.2f}'.format(sum(i.volume[j].values()) / ETH) for i in valuable_infos] +
-                                 ['{:.2f}'.format(sum(sum(i.volume[j].values()) for i in other_infos) / ETH)]
-                                 ) + '\n')
+            y = dict()
+            other = 0
+
+            y['timestamp'] = timestamps[j] * 1000
+
+            for i in valuable_infos:
+                y[i.token_symbol] = '{:.2f}'.format(sum(i.volume[j].values()) / ETH)
+            
+            for i in other_infos:
+                y['other'] = '{:.2f}'.format(other + sum(i.volume[j].values()) / ETH)
+            
+            x.append(y)
+        
+        json.dump(x, out_f, indent=1)
 
 
 def save_raw_data(infos: List[ExchangeInfo]):
