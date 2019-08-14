@@ -10,7 +10,7 @@ DEFAULT_REQUEST_TIMEOUT = 30
 
 web3 = Web3(CustomHTTPProvider(endpoint_uri=NODE_ADDRESS, request_kwargs={'timeout': DEFAULT_REQUEST_TIMEOUT}))
 for each in ['request_param_normalizer', 'name_to_address', 'validation', 'abi']:
-    web3.middleware_stack.remove(each)
+    web3.middleware_onion.remove(each)
 web3_infura = web3
 
 ETH = 10 ** 18
@@ -21,13 +21,13 @@ UNISWAP_BEGIN_BLOCK = 1775445
 
 HISTORY_BEGIN_BLOCK = 1775000
 
-HISTORY_CHUNK_SIZE = 5000
+HISTORY_CHUNK_SIZE = 1000
 
 REORG_PROTECTION_BLOCKS_COUNT = 50
 
 CURRENT_BLOCK = web3.eth.blockNumber - REORG_PROTECTION_BLOCKS_COUNT
 
-LOGS_BLOCKS_CHUNK = 5000
+LOGS_BLOCKS_CHUNK = 1000
 
 THREADS = 8
 

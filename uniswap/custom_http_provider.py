@@ -3,7 +3,7 @@ import lru
 import requests
 from urllib3 import Retry
 from web3 import HTTPProvider
-from web3.utils.caching import (
+from web3._utils.caching import (
     generate_cache_key,
 )
 
