@@ -3,22 +3,20 @@ import logging
 import os
 import pickle
 from collections import defaultdict
-from functools import partial
 from math import sqrt
-from operator import itemgetter
 from typing import List, Iterable
 
 from retrying import retry
 from web3.utils.events import get_event_data
 
-from config import uniswap_factory, web3, web3_infura, pool, UNISWAP_EXCHANGE_ABI, STR_ERC_20_ABI, HARDCODED_INFO, \
+from config import uniswap_factory, web3, pool, UNISWAP_EXCHANGE_ABI, STR_ERC_20_ABI, HARDCODED_INFO, \
     STR_CAPS_ERC_20_ABI, ERC_20_ABI, HISTORY_BEGIN_BLOCK, CURRENT_BLOCK, HISTORY_CHUNK_SIZE, ETH, LIQUIDITY_DATA, \
     PROVIDERS_DATA, TOKENS_DATA, INFOS_DUMP, LAST_BLOCK_DUMP, ALL_EVENTS, EVENT_TRANSFER, EVENT_ADD_LIQUIDITY, \
     EVENT_REMOVE_LIQUIDITY, EVENT_ETH_PURCHASE, ROI_DATA, EVENT_TOKEN_PURCHASE, VOLUME_DATA, TOTAL_VOLUME_DATA, \
     LOGS_BLOCKS_CHUNK, MAX_FEE
 from exchange_info import ExchangeInfo
 from roi_info import RoiInfo
-from utils import timeit, bytes_to_str
+from utils import timeit, bytes_to_str, topic_from_address
 
 
 @timeit
@@ -121,27 +119,34 @@ def load_timestamps() -> List[int]:
     return [d['timestamp'] for d in pool.map(web3.eth.getBlock, get_chart_range())]
 
 
-def get_logs(address: str, topics: List[str], start_block: int) -> List:
+def get_logs(address: str, topics: Iterable[Iterable[str]], start_block: int) -> Iterable:
     @retry(stop_max_attempt_number=3, wait_fixed=1)
-    def get_chunk(start, topic):
+    def get_chunk(start: int):
         return web3.eth.getLogs({
             'fromBlock': start,
             'toBlock': min(start + LOGS_BLOCKS_CHUNK - 1, CURRENT_BLOCK),
             'address': address,
-            'topics': [topic]})
+            'topics': topics})
 
-    log_chunks = []
-    for t in topics:
-        chunk = pool.map(partial(get_chunk, topic=t), range(start_block, CURRENT_BLOCK + 1, LOGS_BLOCKS_CHUNK))
-        log_chunks.extend(chunk)
-    return sorted((log for chunk in log_chunks for log in chunk), key=itemgetter('blockNumber'))
+    log_chunks = pool.map(get_chunk, range(start_block, CURRENT_BLOCK, LOGS_BLOCKS_CHUNK))
+    return [log for chunk in log_chunks for log in chunk]
 
 
 @timeit
 def load_logs(start_block: int, infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
     for info in infos:
-        new_logs = get_logs(info.exchange_address, ALL_EVENTS, start_block)
-        info.logs += new_logs
+        for event in ALL_EVENTS:
+            new_exchange_logs = get_logs(info.exchange_address, [event], start_block)
+            if new_exchange_logs:
+                info.logs += new_exchange_logs
+        new_token_logs = get_logs(
+            info.token_address,
+            [[EVENT_TRANSFER], [None], [topic_from_address(info.exchange_address)]],
+            start_block
+        )
+        if new_token_logs:
+            info.logs += new_token_logs
+        info.logs.sort(key=lambda l: (l['blockNumber'], l['address'] == info.exchange_address, l['topics'][0].hex()))
 
     logging.info('Loaded transfer logs for {} exchanges'.format(len(infos)))
     return infos
@@ -153,7 +158,7 @@ def populate_providers(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
         exchange = web3.eth.contract(abi=UNISWAP_EXCHANGE_ABI, address=info.exchange_address)
         info.providers = defaultdict(int)
         for log in info.logs:
-            if log['topics'][0].hex() != EVENT_TRANSFER:
+            if log['topics'][0].hex() != EVENT_TRANSFER or log['address'] != info.exchange_address:
                 continue
             event = get_event_data(exchange.events.Transfer._get_event_abi(), log)
             if event['args']['_from'] == '0x0000000000000000000000000000000000000000':
@@ -184,7 +189,19 @@ def populate_roi(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
                 i += 1
                 topic = log['topics'][0].hex()
                 if topic == EVENT_TRANSFER:
-                    continue
+                    if log['address'] == info.exchange_address:
+                        # skip liquidity token transfers
+                        continue
+                    elif i < len(info.logs) and info.logs[i]['blockNumber'] == log['blockNumber'] and \
+                            info.logs[i]['topics'][0].hex() in {EVENT_ETH_PURCHASE, EVENT_ADD_LIQUIDITY}:
+                        # skip token transfers that are part of token swaps or liquidity supplies
+                        continue
+                    else:
+                        event = get_event_data(exchange.events.Transfer._get_event_abi(), log)
+                        assert event['args']['_to'] == info.exchange_address
+                        dm_numerator *= token_balance + event['args']['value']
+                        dm_denominator *= token_balance
+                        token_balance += event['args']['value']
                 elif topic == EVENT_ADD_LIQUIDITY:
                     event = get_event_data(exchange.events.AddLiquidity._get_event_abi(), log)
                     eth_balance += event['args']['eth_amount']
@@ -275,7 +292,7 @@ def populate_liquidity_history(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
     for info in infos:
         history_len = len(info.history)
         new_history = pool.map(
-            lambda block_number: web3_infura.eth.getBalance(info.exchange_address, block_number) / ETH,
+            lambda block_number: web3.eth.getBalance(info.exchange_address, block_number) / ETH,
             get_chart_range(HISTORY_BEGIN_BLOCK + history_len * HISTORY_CHUNK_SIZE))
         info.history += new_history
 

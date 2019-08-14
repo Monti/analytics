@@ -2,6 +2,10 @@ import logging
 import time
 
 
+def topic_from_address(address: str) -> str:
+    return '0x' + '0' * 24 + address[2:]
+
+
 def bytes_to_str(x):
     return x.decode().strip('\x00')
 

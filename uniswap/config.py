@@ -9,9 +9,8 @@ NODE_ADDRESS = 'http://127.0.0.1:8545'
 DEFAULT_REQUEST_TIMEOUT = 30
 
 web3 = Web3(CustomHTTPProvider(endpoint_uri=NODE_ADDRESS, request_kwargs={'timeout': DEFAULT_REQUEST_TIMEOUT}))
-for each in ['request_param_normalizer', 'name_to_address', 'validation', 'abi']:
+for each in ['request_param_normalizer', 'name_to_address', 'abi']:
     web3.middleware_stack.remove(each)
-web3_infura = web3
 
 ETH = 10 ** 18
 
