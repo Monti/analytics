@@ -199,9 +199,9 @@ def populate_roi(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
                     else:
                         event = get_event_data(exchange.events.Transfer._get_event_abi(), log)
                         assert event['args']['_to'] == info.exchange_address
-                        dm_numerator *= token_balance + event['args']['value']
+                        dm_numerator *= token_balance + event['args']['_value']
                         dm_denominator *= token_balance
-                        token_balance += event['args']['value']
+                        token_balance += event['args']['_value']
                 elif topic == EVENT_ADD_LIQUIDITY:
                     event = get_event_data(exchange.events.AddLiquidity._get_event_abi(), log)
                     eth_balance += event['args']['eth_amount']
@@ -229,14 +229,11 @@ def populate_roi(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
                     eth_balance = eth_new_balance
                     token_balance = token_new_balance
 
-            try:
-                info.roi.append(RoiInfo(
-                    1 + (sqrt(dm_numerator / dm_denominator) - 1) * (1 - info.platform_fee / MAX_FEE),
-                    eth_balance,
-                    token_balance,
-                    trade_volume))
-            except ValueError:
-                print(info.token_symbol, info.exchange_address)
+            info.roi.append(RoiInfo(
+                1 + (sqrt(dm_numerator / dm_denominator) - 1) * (1 - info.platform_fee / MAX_FEE),
+                eth_balance,
+                token_balance,
+                trade_volume))
 
     logging.info('Loaded info about roi of {} exchanges'.format(len(infos)))
     return infos
