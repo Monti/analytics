@@ -4,7 +4,7 @@ import os
 import pickle
 from collections import defaultdict
 from math import sqrt
-from typing import List, Iterable
+from typing import List, Iterable, Dict, Set
 
 from retrying import retry
 from web3.utils.events import get_event_data
@@ -13,7 +13,7 @@ from config import uniswap_factory, web3, pool, UNISWAP_EXCHANGE_ABI, STR_ERC_20
     STR_CAPS_ERC_20_ABI, ERC_20_ABI, HISTORY_BEGIN_BLOCK, CURRENT_BLOCK, HISTORY_CHUNK_SIZE, ETH, LIQUIDITY_DATA, \
     PROVIDERS_DATA, TOKENS_DATA, INFOS_DUMP, LAST_BLOCK_DUMP, ALL_EVENTS, EVENT_TRANSFER, EVENT_ADD_LIQUIDITY, \
     EVENT_REMOVE_LIQUIDITY, EVENT_ETH_PURCHASE, ROI_DATA, EVENT_TOKEN_PURCHASE, VOLUME_DATA, TOTAL_VOLUME_DATA, \
-    LOGS_BLOCKS_CHUNK, MAX_FEE
+    LOGS_BLOCKS_CHUNK, MAX_FEE, VTHO_ADDRESS, TIMESTAMPS_DUMP
 from exchange_info import ExchangeInfo
 from roi_info import RoiInfo
 from utils import timeit, bytes_to_str, topic_from_address
@@ -177,18 +177,54 @@ def populate_providers(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
 
 
 @timeit
-def populate_roi(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
+def load_block_timestamps(blocks: Iterable[int]) -> Dict[int, int]:
+    return {d['number']: d['timestamp'] for d in pool.map(web3.eth.getBlock, blocks)}
+
+
+def get_valuable_blocks(infos: Iterable[ExchangeInfo]) -> Set[int]:
+    blocks = set()
+    for info in infos:
+        if info.token_address == VTHO_ADDRESS:
+            blocks.add(info.logs[0]['blockNumber'])
+            for l1, l2 in zip(info.logs, info.logs[1:]):
+                if l1['blockNumber'] < l2['blockNumber']:
+                    blocks.add(l2['blockNumber'])
+    logging.info(len(blocks))
+    return blocks
+
+
+@timeit
+def populate_roi(infos: List[ExchangeInfo], ts_dict: Dict[int, int]) -> List[ExchangeInfo]:
+    valuable_blocks = get_valuable_blocks(infos)
+    new_blocks = valuable_blocks.difference(ts_dict.keys())
+    ts_dict.update(load_block_timestamps(new_blocks))
+
     for info in infos:
         info.roi = list()
         exchange = web3.eth.contract(abi=UNISWAP_EXCHANGE_ABI, address=info.exchange_address)
         i = 0
         eth_balance, token_balance = 0, 0
+
+        prev_div_block = info.logs[0]['blockNumber'] if info.logs else None
+        prev_timestamp = ts_dict.get(prev_div_block)
         for block_number in get_chart_range():
             dm_numerator, dm_denominator, trade_volume = 1, 1, 0
             while i < len(info.logs) and info.logs[i]['blockNumber'] <= block_number:
                 log = info.logs[i]
                 i += 1
                 topic = log['topics'][0].hex()
+
+                if info.token_address == VTHO_ADDRESS and eth_balance > 0:
+                    blocks_passed = log['blockNumber'] - prev_div_block
+                    if blocks_passed > 0:
+                        ts = ts_dict[log['blockNumber']]
+                        div_amount = (ts - prev_timestamp) * eth_balance * 5 // 10 ** 9
+                        dm_numerator *= token_balance + div_amount
+                        dm_denominator *= token_balance
+                        token_balance += div_amount
+                        prev_timestamp = ts
+                        prev_div_block = log['blockNumber']
+
                 if topic == EVENT_TRANSFER:
                     if log['address'] == info.exchange_address:
                         # skip liquidity token transfers
@@ -392,6 +428,16 @@ def load_raw_data() -> List[ExchangeInfo]:
         return pickle.load(in_f)
 
 
+def load_ts_data() -> Dict[int, int]:
+    with open(TIMESTAMPS_DUMP, 'rb') as in_f:
+        return pickle.load(in_f)
+
+
+def save_ts_data(ts_dict: Dict[int, int]):
+    with open(TIMESTAMPS_DUMP, 'wb') as out_f:
+        pickle.dump(ts_dict, out_f)
+
+
 def save_last_block(block_number: int):
     with open(LAST_BLOCK_DUMP, 'wb') as out_f:
         pickle.dump(block_number, out_f)
@@ -413,6 +459,7 @@ def main():
     if os.path.exists(LAST_BLOCK_DUMP):
         saved_block = load_last_block()
         infos = load_raw_data()
+        ts_dict = load_ts_data()
         if update_is_required(saved_block):
             logging.info('Last seen block: {}, current block: {}, loading data for {} blocks...'.format(
                 saved_block, CURRENT_BLOCK, CURRENT_BLOCK - saved_block))
@@ -420,22 +467,25 @@ def main():
             load_logs(saved_block + 1, infos)
             populate_liquidity_history(infos)
             populate_providers(infos)
-            populate_roi(infos)
+            populate_roi(infos, ts_dict)
             populate_volume(infos)
             save_last_block(CURRENT_BLOCK)
             save_raw_data(infos)
+            save_ts_data(ts_dict)
         else:
             logging.info('Loaded data is up to date')
     else:
         logging.info('Starting from scratch...')
         infos = sorted(load_exchange_infos([]), key=lambda x: x.eth_balance, reverse=True)
+        ts_dict = dict()
         load_logs(HISTORY_BEGIN_BLOCK, infos)
         populate_liquidity_history(infos)
         populate_providers(infos)
-        populate_roi(infos)
+        populate_roi(infos, ts_dict)
         populate_volume(infos)
         save_last_block(CURRENT_BLOCK)
         save_raw_data(infos)
+        save_ts_data(ts_dict)
 
     valuable_infos = [info for info in infos if is_valuable(info)]
     timestamps = load_timestamps()
