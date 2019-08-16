@@ -154,11 +154,12 @@ def load_logs(start_block: int, infos: List[ExchangeInfo]) -> List[ExchangeInfo]
 
 
 @timeit
-def populate_providers(infos: List[ExchangeInfo]) -> List[ExchangeInfo]:
+def populate_providers(infos: List[ExchangeInfo], saved_block: int) -> List[ExchangeInfo]:
     for info in infos:
         exchange = web3.eth.contract(abi=UNISWAP_EXCHANGE_ABI, address=info.exchange_address)
-        info.providers = defaultdict(int)
         for log in info.logs:
+            if log['blockNumber'] < saved_block:
+                continue
             if log['topics'][0].hex() != EVENT_TRANSFER or log['address'] != info.exchange_address:
                 continue
             event = get_event_data(exchange.events.Transfer._get_event_abi(), log)
@@ -466,7 +467,7 @@ def main():
             infos = sorted(load_exchange_infos(infos), key=lambda x: x.eth_balance, reverse=True)
             load_logs(saved_block + 1, infos)
             populate_liquidity_history(infos)
-            populate_providers(infos)
+            populate_providers(infos, saved_block + 1)
             populate_roi(infos, ts_dict)
             populate_volume(infos)
             save_last_block(CURRENT_BLOCK)
@@ -480,7 +481,7 @@ def main():
         ts_dict = dict()
         load_logs(HISTORY_BEGIN_BLOCK, infos)
         populate_liquidity_history(infos)
-        populate_providers(infos)
+        populate_providers(infos, HISTORY_BEGIN_BLOCK)
         populate_roi(infos, ts_dict)
         populate_volume(infos)
         save_last_block(CURRENT_BLOCK)
