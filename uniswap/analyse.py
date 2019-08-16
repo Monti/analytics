@@ -200,6 +200,8 @@ def populate_roi(infos: List[ExchangeInfo], ts_dict: Dict[int, int]) -> List[Exc
     new_blocks = valuable_blocks.difference(ts_dict.keys())
     ts_dict.update(load_block_timestamps(new_blocks))
 
+    seen_txns = dict()
+
     for info in infos:
         info.roi = list()
         exchange = web3.eth.contract(abi=UNISWAP_EXCHANGE_ABI, address=info.exchange_address)
@@ -214,6 +216,14 @@ def populate_roi(infos: List[ExchangeInfo], ts_dict: Dict[int, int]) -> List[Exc
                 log = info.logs[i]
                 i += 1
                 topic = log['topics'][0].hex()
+
+                block_of_txn = seen_txns.get(log['transactionHash'].hex())
+                if block_of_txn is not None and block_of_txn != log['blockNumber']:
+                    logging.warning('Txn {} was seen in a block {} as well as in {}'.format(
+                        log['transactionHash'].hex(), block_of_txn, log['blockNumber']))
+                    continue
+                elif block_of_txn is None:
+                    seen_txns[log['transactionHash'].hex()] = log['blockNumber']
 
                 if info.token_address == VTHO_ADDRESS and eth_balance > 0:
                     blocks_passed = log['blockNumber'] - prev_div_block
