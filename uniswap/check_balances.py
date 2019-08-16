@@ -35,6 +35,8 @@ def check_balances(info):
 
         for i, b in enumerate(get_chart_range()):
             stored_eth = info.roi[i].eth_balance
+            if stored_eth == 0:
+                continue
             actual_eth = web3.eth.getBalance(info.exchange_address, block_identifier=b)
             stored_tokens = info.roi[i].token_balance
             actual_tokens = token_contract.functions.balanceOf(info.exchange_address).call(block_identifier=b)
