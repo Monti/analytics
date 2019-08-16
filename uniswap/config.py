@@ -54,7 +54,7 @@ uniswap_factory = web3.eth.contract(abi=UNISWAP_FACTORY_ABI, address=UNISWAP_FAC
 
 HARDCODED_INFO = {}
 
-DIST_DIR = '../dist/uniswap/'
+DIST_DIR = '../dist/vexchange/'
 
 LIQUIDITY_DATA = os.path.join(DIST_DIR, 'data/liquidity.csv')
 
