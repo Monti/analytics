@@ -146,7 +146,8 @@ def load_logs(start_block: int, infos: List[ExchangeInfo]) -> List[ExchangeInfo]
         )
         if new_token_logs:
             info.logs += new_token_logs
-        info.logs.sort(key=lambda l: (l['blockNumber'], l['address'] == info.exchange_address, l['topics'][0].hex()))
+        info.logs.sort(key=lambda l: (l['blockNumber'], l['transactionHash'], l['address'] == info.exchange_address,
+                                      l['topics'][0].hex()))
 
     logging.info('Loaded transfer logs for {} exchanges'.format(len(infos)))
     return infos
